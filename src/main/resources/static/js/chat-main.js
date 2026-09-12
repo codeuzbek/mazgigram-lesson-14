@@ -229,7 +229,50 @@ function isSocketConnected() {
  * These carry events from one-to-one chats.
  */
 function subscribeToUserQueues() {
-    // TODO Yegingi darslarda qilinadi
+    stompClient.subscribe('/user/queue/getChatUpdate/', (frame) => {
+        const messageDto = JSON.parse(frame.body);
+        onChatUpdateReceived(messageDto.senderId, messageDto);
+    });
+
+    // chatMessageRead
+    // userTyping
+}
+
+/**
+ * Handles a new / edited / deleted message arriving over the WebSocket.
+ *
+ * @param {string} chatId     the chat the event belongs to
+ * @param {object} messageDto the message payload
+ */
+function onChatUpdateReceived(chatId, messageDto) {
+    // The chat is not open: only bump the unread badge in the sidebar.
+    if (selectedChatId !== chatId) {
+        increaseUnreadMessageCount(chatId, messageDto);
+        return;
+    }
+    // The chat is open but older unread messages are still waiting above,
+    // so keep counting instead of appending out of order.
+    const chatItem = document.getElementById(chatId);
+    const unreadBadge = chatItem ? chatItem.querySelector('.chat-unread') : null;
+    if (unreadBadge && Number(unreadBadge.textContent) > 0) {
+        increaseUnreadMessageCount(chatId, messageDto);
+        return;
+    }
+
+    switch (messageDto.socketMessageType) {
+        case 'NewMessage':
+            renderMessages([messageDto], 'beforeend');
+             // observeUnreadMessages();
+            break;
+        case 'UpdateMessage':
+            // updateMessageContent(messageDto);
+            break;
+        case 'DeleteMessage':
+            // removeMessageFromScreen(messageDto.id);
+            break;
+        default:
+            console.warn('Unknown socketMessageType:', messageDto.socketMessageType);
+    }
 }
 
 /**
@@ -329,6 +372,37 @@ function onChatListClick(event) {
     selectChat(chatItem.id, chatItem.dataset.chatType);
     //is user joined the group
     openChat(chatItem.id);
+}
+
+
+/**
+ * Increases the unread badge of a chat and updates its last-message preview.
+ *
+ * @param {string} chatId
+ * @param {object} messageDto the message that arrived
+ */
+function increaseUnreadMessageCount(chatId, messageDto) {
+    const chatItem = document.getElementById(chatId);
+    if (!chatItem) {
+        return;
+    }
+
+    const lastMessagePreview = chatItem.querySelector('.chat-last-message');
+    if (lastMessagePreview) {
+        lastMessagePreview.textContent = messageDto.content;
+    }
+
+    const chatMeta = chatItem.querySelector('.chat-meta');
+    if (!chatMeta) {
+        return;
+    }
+
+    const unreadBadge = chatMeta.querySelector('.chat-unread');
+    const newCount = unreadBadge ? Number(unreadBadge.textContent) + 1 : 1;
+
+    chatMeta.innerHTML = `
+        <div class="chat-time">${formatDateTime(messageDto.createdDate)}</div>
+        <div class="chat-unread">${newCount}</div>`;
 }
 
 /* =============================================================================

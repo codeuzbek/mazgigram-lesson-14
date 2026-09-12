@@ -17,6 +17,7 @@ import dasturlash.uz.repository.ChatMessageCustomRepository;
 import dasturlash.uz.repository.ChatMessageRepository;
 import dasturlash.uz.util.SpringSecurityUtil;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 
@@ -37,6 +38,9 @@ public class ChatMessageService {
     private ChatService chatService;
     @Autowired
     private ChatMessageCustomRepository chatMessageCustomRepository;
+    @Autowired
+    @Lazy
+    private ChatSocketService chatSocketService;
 
     public ChatMessageDTO createChatMessage(ChatMessageCreateDTO dto) {
         CustomUserDetails sender = SpringSecurityUtil.getCurrentProfile();
@@ -61,7 +65,7 @@ public class ChatMessageService {
         // ChatType.USER
         ProfileEntity receiver = profileService.getById(dto.getReceiverId());
         // send notification to receiver
-
+        chatSocketService.sendChatUpdateToUser(receiver.getEmail(), response); // send notification
         // // GROUP
 
         return response;
