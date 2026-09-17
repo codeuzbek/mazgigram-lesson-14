@@ -20,5 +20,8 @@ public interface ChatMessageRepository extends CrudRepository<ChatMessageEntity,
             " and c.isReceiverRead = true order by  c.createdDate desc limit 1")
     Optional<ChatMessageEntity> findLastReadMessage_userChat(@Param("currentProfileId") String currentProfileId, @Param("senderId") String senderId);
 
-
+    @Transactional
+    @Modifying
+    @Query("Update ChatMessageEntity set isReceiverRead = true where id=:messageId")
+    void markAsRead(@Param("messageId") String senderId);
 }

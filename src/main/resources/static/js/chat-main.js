@@ -9,6 +9,19 @@ const API_BASE = 'http://localhost:8080';
 const PAGE_SIZE = 10;
 
 /**
+ * A message is considered "read" once this much of it is visible.
+ * 0.5 means half of the message.
+ */
+const READ_VISIBILITY_RATIO = 0.5;
+
+/**
+ * How close to the bottom the message area still counts as "following the
+ * conversation", in pixels. A few pixels of slack absorbs rounding and the
+ * bounce of a smooth scroll.
+ */
+const BOTTOM_PROXIMITY_PX = 40;
+
+/**
  * Minimum gap between two "user is typing" signals, in milliseconds.
  * Without this we would send one WebSocket frame per key press.
  * It is deliberately below TYPING_INDICATOR_HIDE_MS so the indicator on the
@@ -40,6 +53,12 @@ let selectedChatType = null;
 /** The chat list as returned by the server. Used to fill the chat header. */
 let chatList = [];
 
+/** Set while editing an existing message; null while writing a new one. */
+let selectedMessageId = null;
+
+/** Set while replying to a message; null otherwise. */
+let repliedMessageId = null;
+
 /** true when a scroll check is already scheduled for the next animation frame. */
 let isScrollCheckScheduled = false;
 
@@ -60,6 +79,9 @@ let isLoadingHistory = false;
  * Stops us asking the server for the very same page twice in a row.
  */
 let lastRequestedCursor = null;
+
+/** Watches messages on screen and marks them as read. Created at startup. */
+let unreadMessageObserver = null;
 
 /* =============================================================================
  * 3. DOM REFERENCES
@@ -103,6 +125,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     currentProfileId = localStorage.getItem('id');
 
     registerEventListeners();
+    unreadMessageObserver = createUnreadMessageObserver();
 
     try {
         await connectWebSocket();
@@ -235,6 +258,10 @@ function subscribeToUserQueues() {
     });
 
     // chatMessageRead
+    stompClient.subscribe('/user/queue/chatMessageRead/', (frame) => {
+        onMessageReadReceived(JSON.parse(frame.body));
+    });
+
     // userTyping
 }
 
@@ -260,10 +287,25 @@ function onChatUpdateReceived(chatId, messageDto) {
     }
 
     switch (messageDto.socketMessageType) {
-        case 'NewMessage':
+        case 'NewMessage': {
+            // Measure before inserting: appending grows scrollHeight.
+            const wasFollowingConversation = isScrolledToBottom();
+
             renderMessages([messageDto], 'beforeend');
-             // observeUnreadMessages();
+
+            if (wasFollowingConversation) {
+                // The user is at the newest message, so show the arrival.
+                scrollToBottom();
+            } else {
+                // The user is reading further up. The message is on the page
+                // but off screen, so it counts as unread until it is seen --
+                // the observer takes the badge back down at that point.
+                increaseUnreadMessageCount(chatId, messageDto);
+            }
+
+            observeUnreadMessages();
             break;
+        }
         case 'UpdateMessage':
             // updateMessageContent(messageDto);
             break;
@@ -295,6 +337,23 @@ function onUserTypingReceived(messageDto) {
     }, TYPING_INDICATOR_HIDE_MS);
 }
 
+/**
+ * The other side read one of our messages: turn the single tick into a double tick.
+ *
+ * @param {object} messageDto contains the id of the message that was read
+ */
+function onMessageReadReceived(messageDto) {
+    const messageElement = document.getElementById(messageDto.id);
+    if (!messageElement) {
+        return;
+    }
+    messageElement.classList.replace('unread', 'read');
+
+    const icon = messageElement.querySelector('.fa-check');
+    if (icon) {
+        icon.classList.replace('fa-check', 'fa-check-double');
+    }
+}
 
 /* =============================================================================
  * 7. CHAT LIST (left sidebar)
@@ -404,6 +463,31 @@ function increaseUnreadMessageCount(chatId, messageDto) {
         <div class="chat-time">${formatDateTime(messageDto.createdDate)}</div>
         <div class="chat-unread">${newCount}</div>`;
 }
+
+/**
+ * Decreases the unread badge of a chat by one, removing it when it hits zero.
+ *
+ * @param {string} chatId
+ */
+function decreaseUnreadMessageCount(chatId) {
+    const chatItem = chatId ? document.getElementById(chatId) : null;
+    if (!chatItem) {
+        return;
+    }
+
+    const unreadBadge = chatItem.querySelector('.chat-unread');
+    if (!unreadBadge) {
+        return;
+    }
+
+    const newCount = Number(unreadBadge.textContent) - 1;
+    if (newCount > 0) {
+        unreadBadge.textContent = String(newCount);
+    } else {
+        unreadBadge.remove();
+    }
+}
+
 
 /* =============================================================================
  * 8. OPENING A CHAT
@@ -519,7 +603,7 @@ async function loadMessageHistory(chatId, justChatOpened = false, scrollDirectio
             isChatJustOpened = false;
             scrollToLastReadMessage();
         }
-        // observeUnreadMessages();
+        observeUnreadMessages();
     });
 
     return messages;
@@ -622,13 +706,16 @@ function renderMessages(messages, position = 'beforeend') {
 
     messages.forEach(message => appendMessage(message, position));
 
+    // Only inserting on top shifts the existing content down. Appending at the
+    // end leaves every message where it was, so there is nothing to correct --
+    // and writing scrollTop back would undo a scrollToBottom() made by the caller.
+    if (position !== 'afterbegin') {
+        return;
+    }
+
     requestAnimationFrame(() => {
-        if (position === 'afterbegin') {
-            const addedHeight = chatMessageContainer.scrollHeight - previousScrollHeight;
-            chatMessageContainer.scrollTop = previousScrollTop + addedHeight;
-        } else {
-            chatMessageContainer.scrollTop = previousScrollTop;
-        }
+        const addedHeight = chatMessageContainer.scrollHeight - previousScrollHeight;
+        chatMessageContainer.scrollTop = previousScrollTop + addedHeight;
     });
 }
 
@@ -766,6 +853,19 @@ function scrollToBottom() {
     chatMessageContainer.scrollTop = chatMessageContainer.scrollHeight;
 }
 
+/**
+ * @returns {boolean} true when the newest message is on screen
+ *
+ * Call this BEFORE inserting a message: appending changes scrollHeight, which
+ * would make an up-to-date view look scrolled away from the bottom.
+ */
+function isScrolledToBottom() {
+    const distanceFromBottom = chatMessageContainer.scrollHeight
+        - chatMessageContainer.scrollTop
+        - chatMessageContainer.clientHeight;
+    return distanceFromBottom <= BOTTOM_PROXIMITY_PX;
+}
+
 /** Scrolls to the newest message the user has already read. */
 function scrollToLastReadMessage() {
     const readMessages = chatMessageContainer.querySelectorAll('.read');
@@ -818,7 +918,6 @@ function isTextKey(event) {
  * the message the user picked with "Edit".
  */
 async function sendMessage() {
-    console.log("sendMessage");
     const content = messageInput.value.trim();
     if (!content || !selectedChatId) {
         return;
@@ -865,6 +964,85 @@ function clearInput() {
     selectedMessageId = null;
     repliedMessageId = null;
 }
+
+/* =============================================================================
+ * 12. READ RECEIPTS
+ * ========================================================================== */
+
+/**
+ * Creates the observer that marks messages as read.
+ *
+ * An IntersectionObserver is the browser's built-in way of being told when an
+ * element becomes visible. It is far cheaper than checking positions on every
+ * scroll event.
+ *
+ * @returns {IntersectionObserver}
+ */
+function createUnreadMessageObserver() {
+    return new IntersectionObserver((entries, observer) => {
+        entries.forEach(entry => {
+            if (!entry.isIntersecting || !isVisibleEnoughToBeRead(entry)) {
+                return;
+            }
+
+            const messageElement = entry.target;
+            observer.unobserve(messageElement); // each message is reported once
+
+            // Our own messages are read by the other side, not by us.
+            if (messageElement.dataset.senderId === currentProfileId) {
+                return;
+            }
+
+            messageElement.classList.remove('unread');
+            markMessageAsRead(messageElement.dataset.messageId);
+
+            // Use the chat the message belongs to, not selectedChatId: the user
+            // may already have switched chats by the time this runs.
+            decreaseUnreadMessageCount(messageElement.dataset.chatId);
+        });
+    }, {
+        root: chatMessageContainer,
+        threshold: [0, READ_VISIBILITY_RATIO]
+    });
+}
+
+/**
+ * @param {IntersectionObserverEntry} entry
+ * @returns {boolean} true when enough of the message is on screen
+ *
+ * A message taller than the message area can never reach the 50% ratio, so a
+ * message that fills half of the visible area counts as read too.
+ */
+function isVisibleEnoughToBeRead(entry) {
+    if (entry.intersectionRatio >= READ_VISIBILITY_RATIO) {
+        return true;
+    }
+    const containerHeight = entry.rootBounds ? entry.rootBounds.height : 0;
+    return containerHeight > 0
+        && entry.intersectionRect.height >= containerHeight * READ_VISIBILITY_RATIO;
+}
+
+/** Starts watching every message on screen that is still unread. */
+function observeUnreadMessages() {
+    if (!unreadMessageObserver) {
+        return;
+    }
+    chatMessageContainer.querySelectorAll('.unread')
+        .forEach(message => unreadMessageObserver.observe(message));
+}
+
+/**
+ * Tells the server that a message has been read.
+ *
+ * @param {string} messageId
+ */
+function markMessageAsRead(messageId) {
+    if (!isSocketConnected()) {
+        return;
+    }
+    stompClient.send('/app/v1/chat.markMessageAsRead', {}, JSON.stringify({messageId: messageId}));
+}
+
 
 
 /* =============================================================================

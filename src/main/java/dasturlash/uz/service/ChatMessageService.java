@@ -120,6 +120,10 @@ public class ChatMessageService {
         return Boolean.TRUE;
     }
 
+    public void markMessageAsRead(String messageId) {
+        messageRepository.markAsRead(messageId);
+    }
+
     public Boolean deleteChatMessage(String messageId) {
         CustomUserDetails sender = SpringSecurityUtil.getCurrentProfile();
         ChatMessageEntity entity = getById(messageId);
