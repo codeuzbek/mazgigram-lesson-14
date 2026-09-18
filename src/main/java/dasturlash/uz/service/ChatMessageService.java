@@ -115,6 +115,7 @@ public class ChatMessageService {
         // USER
         ProfileEntity receiver = profileService.getById(entity.getReceiverId());
         // send notification to receiver
+        chatSocketService.sendChatUpdateToUser(receiver.getEmail(), message); // send notification
         // GROUP
 
         return Boolean.TRUE;
@@ -139,8 +140,9 @@ public class ChatMessageService {
         message.setSocketMessageType("DeleteMessage");
         message.setReceiverId(entity.getReceiverId());
         message.setSenderId(entity.getSenderId());
-
         // send notification to receiver
+        chatSocketService.sendChatUpdateToUser(receiver.getEmail(), message); // send notification
+
         return Boolean.TRUE;
     }
 

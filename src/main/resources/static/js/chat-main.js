@@ -152,7 +152,11 @@ function registerEventListeners() {
     // `passive: true` tells the browser we never call preventDefault(),
     // which lets it keep scrolling smoothly.
     chatMessageContainer.addEventListener('scroll', onChatScroll, {passive: true});
-    // ...
+
+    // Clicking anywhere closes any open tooltip.
+    document.addEventListener('click', closeAllTooltips);
+
+
 }
 
 /* =============================================================================
@@ -307,10 +311,10 @@ function onChatUpdateReceived(chatId, messageDto) {
             break;
         }
         case 'UpdateMessage':
-            // updateMessageContent(messageDto);
+            updateMessageContent(messageDto);
             break;
         case 'DeleteMessage':
-            // removeMessageFromScreen(messageDto.id);
+            removeMessageFromScreen(messageDto.id);
             break;
         default:
             console.warn('Unknown socketMessageType:', messageDto.socketMessageType);
@@ -848,6 +852,18 @@ function updateMessageContent(message) {
     }
 }
 
+/**
+ * Removes a message from the screen.
+ *
+ * @param {string} messageId
+ */
+function removeMessageFromScreen(messageId) {
+    const element = document.getElementById(messageId);
+    if (element) {
+        element.remove();
+    }
+}
+
 /** Scrolls to the bottom of the message area. */
 function scrollToBottom() {
     chatMessageContainer.scrollTop = chatMessageContainer.scrollHeight;
@@ -958,12 +974,73 @@ async function sendMessage() {
     }
 }
 
+/**
+ * Deletes a message after asking the user to confirm.
+ * Called from the tooltip in the message HTML.
+ *
+ * @param {string} messageId
+ */
+async function deleteMessage(messageId) {
+    if (!confirm('Do you want to delete this message?')) {
+        return;
+    }
+    try {
+        await apiRequest(`/api/v1/chat-message/${messageId}`, {method: 'DELETE'});
+        removeMessageFromScreen(messageId);
+    } catch (error) {
+        console.error('Could not delete the message:', error);
+    }
+}
+
+/**
+ * Loads a message into the input box so the user can change it.
+ * Called from the tooltip in the message HTML.
+ *
+ * @param {string} messageId
+ */
+function editMessage(messageId) {
+    const contentElement = document.getElementById(messageId + '-content');
+    if (!contentElement) {
+        return; // only text messages can be edited
+    }
+    selectedMessageId = messageId;
+    messageInput.value = contentElement.innerText;
+    messageInput.classList.add('input-field-with-icon');
+    messageInput.focus();
+    showInputMessageClearIcon();
+}
+
+
+/**
+ * Marks a message as the one being replied to.
+ * Called from the tooltip in the message HTML.
+ *
+ * @param {string} messageId
+ */
+function replyToMessage(messageId) {
+    repliedMessageId = messageId;
+    messageInput.classList.add('input-field-with-icon');
+    messageInput.focus();
+    showInputMessageClearIcon();
+}
+
 /** Empties the input box and cancels any pending edit or reply. */
 function clearInput() {
     messageInput.value = '';
     selectedMessageId = null;
     repliedMessageId = null;
+    hideInputMessageClearIcon();
 }
+
+function showInputMessageClearIcon() {
+    inputMessageClearIcon.classList.remove('display-non');
+}
+
+function hideInputMessageClearIcon() {
+    inputMessageClearIcon.classList.add('display-non');
+    messageInput.classList.remove('input-field-with-icon');
+}
+
 
 /* =============================================================================
  * 12. READ RECEIPTS
@@ -1044,6 +1121,29 @@ function markMessageAsRead(messageId) {
 }
 
 
+/* =============================================================================
+ * 16. SMALL HELPERS
+ * ========================================================================== */
+
+/**
+ * Opens or closes the tooltip next to a message.
+ * Called from the message HTML.
+ *
+ * @param {MouseEvent} event
+ */
+function openToolTip(event) {
+    const tooltip = event.currentTarget.nextElementSibling;
+    tooltip.classList.toggle('show');
+    // Stop the click here, otherwise the document listener closes it again.
+    event.stopPropagation();
+}
+
+
+/** Closes every open tooltip on the page. */
+function closeAllTooltips() {
+    document.querySelectorAll('.tooltip.show')
+        .forEach(tooltip => tooltip.classList.remove('show'));
+}
 
 /* =============================================================================
  * 20. SMALL UTIL/HELPERS
