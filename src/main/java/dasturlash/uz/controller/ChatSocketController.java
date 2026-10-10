@@ -30,4 +30,11 @@ public class ChatSocketController {
         chatSocketService.markMessageAsRead(dto.getMessageId(), principal);
         return "DONE";
     }
+
+    @MessageMapping("/chat.userTyping.{chatId}")
+    public String userTyping(@DestinationVariable String chatId, Principal principal) {
+        chatSocketService.userTyping(chatId, principal);
+        return "DONE";
+    }
+
 }
